@@ -52,37 +52,66 @@ class ZenDatabase {
     final dbPath = await getDatabasesPath();
     final path = p.join(dbPath, filePath);
 
-    return await openDatabase(path, version: 1, onCreate: _createDB);
+    return await openDatabase(
+      path,
+      version: 2, // INCREASED VERSION
+      onCreate: _createDB,
+      onUpgrade: _onUpgrade, // Handle migration
+    );
   }
 
   Future _createDB(Database db, int version) async {
-    const sql = '''
-    CREATE TABLE app_stats (
-      package_name TEXT PRIMARY KEY,
-      usage_count INTEGER DEFAULT 0,
-      is_hidden INTEGER DEFAULT 0
-    )
-    ''';
-    await db.execute(sql);
+    await db.execute('''
+      CREATE TABLE app_stats (
+        package_name TEXT PRIMARY KEY,
+        usage_count INTEGER DEFAULT 0,
+        is_hidden INTEGER DEFAULT 0,
+        first_seen INTEGER DEFAULT 0  -- New column
+      )
+    ''');
   }
 
-  Future<Map<String, int>> getAllUsageCounts() async {
+  // Handle existing users
+  Future _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await db.execute(
+        'ALTER TABLE app_stats ADD COLUMN first_seen INTEGER DEFAULT 0',
+      );
+    }
+  }
+
+  // Returns map of PackageName -> {usage, firstSeen}
+  Future<Map<String, Map<String, dynamic>>> getAllStats() async {
     final db = await instance.database;
     final result = await db.query('app_stats');
 
-    // Convert List<Map> to Map<String, int> for O(1) lookup
-    final Map<String, int> map = {};
+    final Map<String, Map<String, dynamic>> map = {};
     for (var row in result) {
-      map[row['package_name'] as String] = row['usage_count'] as int;
+      map[row['package_name'] as String] = {
+        'usage': row['usage_count'] as int,
+        'first_seen': row['first_seen'] as int,
+      };
     }
     return map;
   }
 
+  Future<void> registerApp(String packageName, int timestamp) async {
+    final db = await instance.database;
+    // Only insert if not exists. If exists, we don't want to overwrite the old timestamp.
+    await db.rawInsert(
+      'INSERT OR IGNORE INTO app_stats (package_name, usage_count, first_seen) VALUES (?, 0, ?)',
+      [packageName, timestamp],
+    );
+  }
+
   Future<void> incrementUsage(String packageName) async {
     final db = await instance.database;
+    // Ensure record exists (edge case) then update
     await db.rawInsert(
-      'INSERT INTO app_stats (package_name, usage_count) VALUES (?, 1) ON CONFLICT(package_name) DO UPDATE SET usage_count = usage_count + 1',
-      [packageName],
+      '''INSERT INTO app_stats (package_name, usage_count, first_seen) 
+         VALUES (?, 1, ?) 
+         ON CONFLICT(package_name) DO UPDATE SET usage_count = usage_count + 1''',
+      [packageName, DateTime.now().millisecondsSinceEpoch],
     );
   }
 }
@@ -93,23 +122,42 @@ class ZenDatabase {
 class ZenApp {
   final AppInfo info;
   int usageCount;
-  // Pre-calculate lower case name for faster search filtering
+  final int firstSeenTimestamp; // Unix millis
   final String normalizedName;
 
-  ZenApp({required this.info, required this.usageCount})
-    : normalizedName = info.name.toLowerCase();
+  ZenApp({
+    required this.info,
+    required this.usageCount,
+    required this.firstSeenTimestamp,
+  }) : normalizedName = info.name.toLowerCase();
+
+  // It is "New" if it was seen less than 3 hours ago
+  bool get isNew {
+    // If timestamp is 0, it's an old app from before we started tracking
+    if (firstSeenTimestamp == 0) return false;
+
+    final installTime = DateTime.fromMillisecondsSinceEpoch(firstSeenTimestamp);
+    final diff = DateTime.now().difference(installTime);
+    return diff.inHours < 3;
+  }
 }
 
 // -----------------------------------------------------------------------------
 // SERVICE LAYER: Singleton Cache & State
 // -----------------------------------------------------------------------------
 class AppCacheService extends ChangeNotifier {
-  // Singleton pattern
   static final AppCacheService instance = AppCacheService._();
   AppCacheService._();
 
+  // The Native Channel we just built in Kotlin
+  static const _eventChannel = EventChannel(
+    'com.zen.launcher/app_change_events',
+  );
+
   List<ZenApp> _cachedApps = [];
   bool _isLoaded = false;
+
+  StreamSubscription? _appChangeSubscription;
 
   List<ZenApp> get apps => List.unmodifiable(_cachedApps);
   bool get isLoaded => _isLoaded;
@@ -117,39 +165,82 @@ class AppCacheService extends ChangeNotifier {
   Future<void> init() async {
     if (_isLoaded) return;
 
-    // Parallel Execution: Fetch OS apps and DB stats simultaneously
+    // 1. Initial Load
+    await _fetchApps();
+
+    // 2. Start listening to the native radio station
+    _startListeningToChanges();
+
+    _isLoaded = true;
+  }
+
+  void _startListeningToChanges() {
+    _appChangeSubscription?.cancel();
+
+    // Listen to the stream from Kotlin
+    _appChangeSubscription = _eventChannel.receiveBroadcastStream().listen(
+      (dynamic event) {
+        debugPrint("Native App Event detected: $event");
+        // Reload the list whenever an event comes in
+        _fetchApps();
+      },
+      onError: (error) {
+        debugPrint("Error listening to app changes: $error");
+      },
+    );
+  }
+
+  Future<void> _fetchApps() async {
     final appsFuture = InstalledApps.getInstalledApps(
+      excludeSystemApps: false,
       withIcon: true,
       packageNamePrefix: '',
     );
-    final statsFuture = ZenDatabase.instance.getAllUsageCounts();
+    final statsFuture = ZenDatabase.instance.getAllStats();
 
     final results = await Future.wait([appsFuture, statsFuture]);
-
     final List<AppInfo> rawApps = results[0] as List<AppInfo>;
-    final Map<String, int> usageStats = results[1] as Map<String, int>;
+    final Map<String, Map<String, dynamic>> stats =
+        results[1] as Map<String, Map<String, dynamic>>;
 
-    // O(n) Merge
-    _cachedApps = rawApps.map((app) {
-      final count = usageStats[app.packageName] ?? 0;
-      return ZenApp(info: app, usageCount: count);
-    }).toList();
+    final int now = DateTime.now().millisecondsSinceEpoch;
+    final bool isFreshInstall = stats.isEmpty;
 
+    List<ZenApp> tempApps = [];
+
+    for (var app in rawApps) {
+      int usage = 0;
+      int firstSeen = 0;
+
+      if (stats.containsKey(app.packageName)) {
+        // Known app
+        usage = stats[app.packageName]!['usage'];
+        firstSeen = stats[app.packageName]!['first_seen'];
+      } else {
+        // Unknown app (New Install OR First run of Launcher)
+        // If it's the first ever run of the launcher, don't mark everything as "New"
+        firstSeen = isFreshInstall ? 0 : now;
+
+        // Fire and forget: save to DB so it persists across reboots
+        ZenDatabase.instance.registerApp(app.packageName, firstSeen);
+      }
+
+      tempApps.add(
+        ZenApp(info: app, usageCount: usage, firstSeenTimestamp: firstSeen),
+      );
+    }
+
+    _cachedApps = tempApps;
     _sortApps();
-    _isLoaded = true;
     notifyListeners();
   }
 
+  // ... (Keep launchApp and _sortApps as they were) ...
   Future<void> launchApp(ZenApp app) async {
-    // 1. Optimistic UI Update
     app.usageCount++;
-    _sortApps(); // Re-sort immediately
+    _sortApps();
     notifyListeners();
-
-    // 2. Persist to SQLite (Fire and forget)
     ZenDatabase.instance.incrementUsage(app.info.packageName);
-
-    // 3. Launch
     InstalledApps.startApp(app.info.packageName);
   }
 
@@ -159,6 +250,12 @@ class AppCacheService extends ChangeNotifier {
       if (comparison != 0) return comparison;
       return a.normalizedName.compareTo(b.normalizedName);
     });
+  }
+
+  @override
+  void dispose() {
+    _appChangeSubscription?.cancel();
+    super.dispose();
   }
 }
 
@@ -262,7 +359,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
         WallpaperManagerPlus().setWallpaper(
           file,
-          WallpaperManagerPlus.homeScreen,
+          WallpaperManagerPlus.bothScreens,
         );
 
         // Schedule the next one for exactly 24 hours from now
@@ -417,21 +514,15 @@ class SmartAppListDrawer extends StatefulWidget {
 
 class _SmartAppListDrawerState extends State<SmartAppListDrawer> {
   final TextEditingController _searchController = TextEditingController();
-
-  // We don't store the massive list here anymore.
-  // We just store the filtered view.
-  List<ZenApp> _filteredApps = [];
+  List<ZenApp> _newApps = [];
+  List<ZenApp> _allApps = [];
+  bool _isSearching = false;
 
   @override
   void initState() {
     super.initState();
-    // Initial fetch from memory
     _updateFilteredList();
-
-    // Listen for text changes
     _searchController.addListener(_updateFilteredList);
-
-    // Listen for Service changes (in case usages update while drawer is open)
     AppCacheService.instance.addListener(_onServiceUpdate);
   }
 
@@ -447,15 +538,21 @@ class _SmartAppListDrawerState extends State<SmartAppListDrawer> {
   }
 
   void _updateFilteredList() {
-    final allApps = AppCacheService.instance.apps;
+    final all = AppCacheService.instance.apps;
     final query = _searchController.text.trim().toLowerCase();
 
     setState(() {
       if (query.isEmpty) {
-        _filteredApps = allApps;
+        _isSearching = false;
+        // Logic: Separate New from Old
+        _newApps = all.where((app) => app.isNew).toList();
+        // The main list contains everything (or you can exclude new ones if you prefer)
+        // Usually, users expect "All Apps" to contain everything.
+        _allApps = all;
       } else {
-        // Efficient filtering using the pre-calculated normalized name
-        _filteredApps = allApps
+        _isSearching = true;
+        _newApps = []; // Hide new section when searching
+        _allApps = all
             .where((app) => app.normalizedName.contains(query))
             .toList();
       }
@@ -464,7 +561,6 @@ class _SmartAppListDrawerState extends State<SmartAppListDrawer> {
 
   @override
   Widget build(BuildContext context) {
-    // Check if the service is ready (it should be, since we called init in main)
     if (!AppCacheService.instance.isLoaded) {
       return const Center(
         child: CircularProgressIndicator(color: Colors.white24),
@@ -475,7 +571,6 @@ class _SmartAppListDrawerState extends State<SmartAppListDrawer> {
       initialChildSize: 0.9,
       minChildSize: 0.6,
       maxChildSize: 0.95,
-      // Snap feels more native
       snap: true,
       builder: (_, scrollController) {
         return ClipRRect(
@@ -489,20 +584,72 @@ class _SmartAppListDrawerState extends State<SmartAppListDrawer> {
                   _buildSearchBar(),
                   const Divider(color: Colors.white12, height: 1),
                   Expanded(
-                    child: ListView.builder(
+                    child: CustomScrollView(
                       controller: scrollController,
-                      padding: const EdgeInsets.symmetric(vertical: 10),
-                      // Use itemExtent for performance boost if height is fixed
-                      itemExtent: 72,
-                      itemCount: _filteredApps.length,
-                      itemBuilder: (context, index) {
-                        final app = _filteredApps[index];
-                        // Pass Key to ensure efficient updating if list changes
-                        return AppListItem(
-                          key: ValueKey(app.info.packageName),
-                          zenApp: app,
-                        );
-                      },
+                      slivers: [
+                        // 1. NEW APPS SECTION
+                        if (_newApps.isNotEmpty) ...[
+                          const SliverToBoxAdapter(
+                            child: Padding(
+                              padding: EdgeInsets.fromLTRB(25, 20, 25, 5),
+                              child: Text(
+                                "RECENTLY INSTALLED",
+                                style: TextStyle(
+                                  color: Colors.amberAccent,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 1.5,
+                                ),
+                              ),
+                            ),
+                          ),
+                          SliverList(
+                            delegate: SliverChildBuilderDelegate(
+                              (context, index) => AppListItem(
+                                key: ValueKey(
+                                  "new_${_newApps[index].info.packageName}",
+                                ),
+                                zenApp: _newApps[index],
+                                isHighlighted: true, // Special visual flag
+                              ),
+                              childCount: _newApps.length,
+                            ),
+                          ),
+                          const SliverToBoxAdapter(child: SizedBox(height: 10)),
+                        ],
+
+                        // 2. ALL APPS HEADER (Only show if we have a New section to separate from)
+                        if (_newApps.isNotEmpty && !_isSearching)
+                          const SliverToBoxAdapter(
+                            child: Padding(
+                              padding: EdgeInsets.fromLTRB(25, 10, 25, 5),
+                              child: Text(
+                                "ALL APPS",
+                                style: TextStyle(
+                                  color: Colors.white38,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 1.5,
+                                ),
+                              ),
+                            ),
+                          ),
+
+                        // 3. MAIN LIST
+                        SliverFixedExtentList(
+                          itemExtent: 72,
+                          delegate: SliverChildBuilderDelegate(
+                            (context, index) => AppListItem(
+                              key: ValueKey(_allApps[index].info.packageName),
+                              zenApp: _allApps[index],
+                            ),
+                            childCount: _allApps.length,
+                          ),
+                        ),
+
+                        // Bottom padding for navigation bar
+                        const SliverToBoxAdapter(child: SizedBox(height: 50)),
+                      ],
                     ),
                   ),
                 ],
@@ -519,7 +666,7 @@ class _SmartAppListDrawerState extends State<SmartAppListDrawer> {
       padding: const EdgeInsets.fromLTRB(25, 25, 25, 15),
       child: TextField(
         controller: _searchController,
-        style: const TextStyle(color: Colors.white, fontSize: 18, height: 1.2),
+        style: const TextStyle(color: Colors.white, fontSize: 18),
         decoration: const InputDecoration(
           hintText: 'Search...',
           hintStyle: TextStyle(color: Colors.white24, fontSize: 18),
@@ -535,8 +682,7 @@ class _SmartAppListDrawerState extends State<SmartAppListDrawer> {
 
 class AppListItem extends StatelessWidget {
   final ZenApp zenApp;
-
-  const AppListItem({super.key, required this.zenApp});
+  final bool isHighlighted;
 
   static const ColorFilter _grayscaleFilter = ColorFilter.matrix(<double>[
     0.2126,
@@ -561,27 +707,68 @@ class AppListItem extends StatelessWidget {
     0,
   ]);
 
+  const AppListItem({
+    super.key,
+    required this.zenApp,
+    this.isHighlighted = false,
+  });
+
   @override
   Widget build(BuildContext context) {
     return InkWell(
       onTap: () => AppCacheService.instance.launchApp(zenApp),
       splashColor: Colors.white10,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 25),
+        padding: EdgeInsets.symmetric(
+          horizontal: 25,
+          vertical: zenApp.isNew ? 5 : 0,
+        ),
         child: Row(
           children: [
             Expanded(
-              child: Text(
-                zenApp.info.name,
-                style: const TextStyle(
-                  fontSize: 16,
-                  color: Colors.white,
-                  fontWeight: FontWeight.w400,
-                  letterSpacing: 0.5,
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.fade,
-                softWrap: false,
+              child: Row(
+                children: [
+                  Flexible(
+                    child: Text(
+                      zenApp.info.name,
+                      style: TextStyle(
+                        fontSize: 16,
+                        color: isHighlighted
+                            ? Colors.amberAccent
+                            : Colors.white,
+                        fontWeight: isHighlighted
+                            ? FontWeight.bold
+                            : FontWeight.w400,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.fade,
+                      softWrap: false,
+                    ),
+                  ),
+                  // THE ICON INDICATOR
+                  if (zenApp.isNew)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 8),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.amber,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: const Text(
+                          "NEW",
+                          style: TextStyle(
+                            color: Colors.black,
+                            fontSize: 9,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ),
             const SizedBox(width: 15),
@@ -591,7 +778,6 @@ class AppListItem extends StatelessWidget {
               child: zenApp.info.icon != null
                   ? ColorFiltered(
                       colorFilter: _grayscaleFilter,
-                      // Optimization: gaplessPlayback prevents flickering
                       child: Image.memory(
                         zenApp.info.icon!,
                         fit: BoxFit.contain,
