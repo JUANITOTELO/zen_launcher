@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:installed_apps/app_info.dart';
@@ -33,36 +34,54 @@ class AppCacheService extends ChangeNotifier {
 
   Future<void> init() async {
     if (_isLoaded) return;
-    await _fetchApps();
-    _startListeningToChanges();
-    _isLoaded = true;
+    try {
+      await _fetchApps();
+      _startListeningToChanges();
+    } catch (e) {
+      debugPrint("Error initializing AppCacheService: $e");
+    } finally {
+      _isLoaded = true;
+      notifyListeners();
+    }
   }
 
   void _startListeningToChanges() {
+    if (!Platform.isAndroid) return;
     _appChangeSubscription?.cancel();
-    _appChangeSubscription = _eventChannel.receiveBroadcastStream().listen(
-      (dynamic event) {
-        debugPrint("Native App Event detected: $event");
-        _fetchApps();
-      },
-      onError: (error) {
-        debugPrint("Error listening to app changes: $error");
-      },
-    );
+    try {
+      _appChangeSubscription = _eventChannel.receiveBroadcastStream().listen(
+        (dynamic event) {
+          debugPrint("Native App Event detected: $event");
+          _fetchApps();
+        },
+        onError: (error) {
+          debugPrint("Error listening to app changes: $error");
+        },
+      );
+    } catch (e) {
+      debugPrint("Error setting up app changes event channel: $e");
+    }
   }
 
   Future<void> _fetchApps() async {
-    final appsFuture = InstalledApps.getInstalledApps(
-      excludeSystemApps: false,
-      withIcon: true,
-      packageNamePrefix: '',
-    );
-    final statsFuture = ZenDatabase.instance.getAllStats();
+    List<AppInfo> rawApps = [];
+    Map<String, Map<String, dynamic>> stats = {};
 
-    final results = await Future.wait([appsFuture, statsFuture]);
-    final List<AppInfo> rawApps = results[0] as List<AppInfo>;
-    final Map<String, Map<String, dynamic>> stats =
-        results[1] as Map<String, Map<String, dynamic>>;
+    try {
+      rawApps = await InstalledApps.getInstalledApps(
+        excludeSystemApps: false,
+        withIcon: true,
+        packageNamePrefix: '',
+      );
+    } catch (e) {
+      debugPrint("Error fetching installed apps: $e");
+    }
+
+    try {
+      stats = await ZenDatabase.instance.getAllStats();
+    } catch (e) {
+      debugPrint("Error fetching app stats from database: $e");
+    }
 
     final int now = DateTime.now().millisecondsSinceEpoch;
     final bool isFreshInstall = stats.isEmpty;
@@ -79,7 +98,9 @@ class AppCacheService extends ChangeNotifier {
       } else {
         // Unknown app (New Install OR First run of Launcher)
         firstSeen = isFreshInstall ? 0 : now;
-        ZenDatabase.instance.registerApp(app.packageName, firstSeen);
+        try {
+          ZenDatabase.instance.registerApp(app.packageName, firstSeen);
+        } catch (_) {}
       }
 
       tempApps.add(
@@ -96,8 +117,14 @@ class AppCacheService extends ChangeNotifier {
     app.usageCount++;
     _sortApps();
     notifyListeners();
-    ZenDatabase.instance.incrementUsage(app.info.packageName);
-    InstalledApps.startApp(app.info.packageName);
+    try {
+      ZenDatabase.instance.incrementUsage(app.info.packageName);
+    } catch (_) {}
+    try {
+      InstalledApps.startApp(app.info.packageName);
+    } catch (e) {
+      debugPrint("Error launching app: $e");
+    }
   }
 
   void _sortApps() {
