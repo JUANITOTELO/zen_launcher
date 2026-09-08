@@ -24,6 +24,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   final String _imageUrl = "https://juanitotelo.net/daily.webp";
   File? _localFile;
+  int _wallpaperVersion = 0;
   bool _isSyncing = false;
   Timer? _timer;
 
@@ -90,23 +91,44 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (mounted) setState(() => _isSyncing = true);
 
     try {
-      final response = await http.get(Uri.parse(_imageUrl));
+      final cacheBustedUrl = Uri.parse(
+        '$_imageUrl?t=${DateTime.now().millisecondsSinceEpoch}',
+      );
+      final response = await http.get(
+        cacheBustedUrl,
+        headers: const {
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+        },
+      );
+
       if (response.statusCode == 200) {
         final directory = await getApplicationDocumentsDirectory();
         final file = File('${directory.path}/daily_wallpaper.webp');
 
         await file.writeAsBytes(response.bodyBytes);
         await FileImage(file).evict();
+        PaintingBinding.instance.imageCache.clear();
+        PaintingBinding.instance.imageCache.clearLiveImages();
 
-        WallpaperManagerPlus().setWallpaper(
-          file,
-          WallpaperManagerPlus.bothScreens,
-        );
+        if (Platform.isAndroid) {
+          try {
+            WallpaperManagerPlus().setWallpaper(
+              file,
+              WallpaperManagerPlus.bothScreens,
+            );
+          } catch (e) {
+            debugPrint("WallpaperManager platform error: $e");
+          }
+        }
 
         _scheduleNextUpdate(const Duration(hours: 24));
 
         if (mounted) {
-          setState(() => _localFile = file);
+          setState(() {
+            _localFile = file;
+            _wallpaperVersion = DateTime.now().millisecondsSinceEpoch;
+          });
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text('Zen refreshed.'),
@@ -115,10 +137,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
           );
         }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Wallpaper download failed (${response.statusCode})'),
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        }
       }
     } catch (e) {
       debugPrint("Wallpaper Error: $e");
       _scheduleNextUpdate(const Duration(hours: 1));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not refresh wallpaper. Retrying later.'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
     } finally {
       if (mounted) setState(() => _isSyncing = false);
     }
@@ -229,7 +268,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           children: [
             // 1. Static Background Layer
             if (_localFile != null)
-              Image.file(_localFile!, fit: BoxFit.cover, gaplessPlayback: true)
+              Image.file(
+                _localFile!,
+                key: ValueKey('wallpaper_$_wallpaperVersion'),
+                fit: BoxFit.cover,
+                gaplessPlayback: true,
+              )
             else
               const DecoratedBox(
                 decoration: BoxDecoration(color: Colors.black38),
