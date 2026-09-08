@@ -153,6 +153,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       barrierColor: Colors.black26,
       builder: (context) => const SmartAppListDrawer(),
     ).then((_) {
+      FocusManager.instance.primaryFocus?.unfocus();
+      SystemChannels.textInput.invokeMethod('TextInput.hide');
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     });
   }

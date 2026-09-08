@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../../../domain/models/zen_app.dart';
 import '../../../core/services/app_cache_service.dart';
 
@@ -38,7 +39,14 @@ class AppListItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return InkWell(
-      onTap: () => AppCacheService.instance.launchApp(zenApp),
+      onTap: () {
+        FocusScope.of(context).unfocus();
+        SystemChannels.textInput.invokeMethod('TextInput.hide');
+        if (Navigator.of(context).canPop()) {
+          Navigator.of(context).pop();
+        }
+        AppCacheService.instance.launchApp(zenApp);
+      },
       splashColor: Colors.white10,
       child: Padding(
         padding: EdgeInsets.symmetric(

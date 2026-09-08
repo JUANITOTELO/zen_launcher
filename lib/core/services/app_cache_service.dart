@@ -24,6 +24,13 @@ class AppCacheService extends ChangeNotifier {
   List<ZenApp> get apps => List.unmodifiable(_cachedApps);
   bool get isLoaded => _isLoaded;
 
+  @visibleForTesting
+  void setAppsForTesting(List<ZenApp> apps) {
+    _cachedApps = apps;
+    _isLoaded = true;
+    notifyListeners();
+  }
+
   Future<void> init() async {
     if (_isLoaded) return;
     await _fetchApps();
