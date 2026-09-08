@@ -41,7 +41,7 @@ class ZenLauncherApp extends StatelessWidget {
         scaffoldBackgroundColor: Colors.black12,
         splashFactory: InkRipple.splashFactory,
         textTheme: const TextTheme(
-          bodyMedium: TextStyle(color: Colors.white, fontFamily: 'Roboto'),
+          bodyMedium: TextStyle(color: Colors.white, fontFamily: 'monospace'),
         ),
       ),
       home: const HomeScreen(),
