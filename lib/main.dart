@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'core/services/app_cache_service.dart';
+import 'core/services/quick_action_service.dart';
 import 'presentation/screens/home_screen.dart';
 
 void main() async {
@@ -24,7 +25,8 @@ void main() async {
   );
 
   // 2. Initialize Core Services
-  AppCacheService.instance.init();
+  await AppCacheService.instance.init();
+  await QuickActionService.instance.init();
 
   runApp(const ZenLauncherApp());
 }

@@ -1,15 +1,13 @@
-import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; // Needed for SystemChrome & MethodChannel
-import 'package:http/http.dart' as http;
-import 'package:path_provider/path_provider.dart';
-import 'package:wallpaper_manager_plus/wallpaper_manager_plus.dart';
+import 'package:flutter/services.dart';
 
-import '../../core/services/app_cache_service.dart'; // Added for app launching
-import '../../domain/models/zen_app.dart'; // Added for ZenApp type
-import '../widgets/clock_widget.dart';
+import '../../core/services/wallpaper_service.dart';
 import '../drawers/smart_app_drawer.dart';
+import '../pages/quick_notes_page.dart';
+import '../pages/zen_calendar_page.dart';
+import '../widgets/clock_widget.dart';
+import '../widgets/home_dock.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -19,36 +17,25 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
-  // Channel to communicate with MainActivity.kt
   static const _platform = MethodChannel('com.zen.launcher/utils');
 
-  final String _imageUrl = "https://juanitotelo.net/daily.webp";
-  File? _localFile;
-  int _wallpaperVersion = 0;
-  bool _isSyncing = false;
-  Timer? _timer;
-
-  // Carousel Controller
-  // Start at 1000 so we can swipe left immediately (Infinite illusion)
-  // 1000 % 3 == 1 (Home Screen)
+  // Carousel Controller: initialPage 1000 % 3 == 1 (Home Screen)
   final PageController _pageController = PageController(initialPage: 1000);
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _initBackground();
+    WallpaperService.instance.initBackground();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _pageController.dispose();
-    _timer?.cancel();
     super.dispose();
   }
 
-  // 2. Handle Lifecycle Changes
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
@@ -56,110 +43,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         Navigator.of(context).popUntil((route) => route.isFirst);
       }
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    }
-  }
-
-  Future<void> _initBackground() async {
-    final directory = await getApplicationDocumentsDirectory();
-    final file = File('${directory.path}/daily_wallpaper.webp');
-
-    if (await file.exists()) {
-      setState(() => _localFile = file);
-      final lastModified = await file.lastModified();
-      final difference = DateTime.now().difference(lastModified);
-
-      if (difference.inHours >= 24) {
-        _syncWallpaper();
-      } else {
-        final timeUntilNextUpdate = const Duration(hours: 24) - difference;
-        _scheduleNextUpdate(timeUntilNextUpdate);
-      }
-    } else {
-      _syncWallpaper();
-    }
-  }
-
-  void _scheduleNextUpdate(Duration waitDuration) {
-    _timer?.cancel();
-    _timer = Timer(waitDuration, () {
-      _syncWallpaper();
-    });
-  }
-
-  Future<void> _syncWallpaper() async {
-    if (_isSyncing) return;
-    if (mounted) setState(() => _isSyncing = true);
-
-    try {
-      final cacheBustedUrl = Uri.parse(
-        '$_imageUrl?t=${DateTime.now().millisecondsSinceEpoch}',
-      );
-      final response = await http.get(
-        cacheBustedUrl,
-        headers: const {
-          'Cache-Control': 'no-cache, no-store, must-revalidate',
-          'Pragma': 'no-cache',
-        },
-      );
-
-      if (response.statusCode == 200) {
-        final directory = await getApplicationDocumentsDirectory();
-        final file = File('${directory.path}/daily_wallpaper.webp');
-
-        await file.writeAsBytes(response.bodyBytes);
-        await FileImage(file).evict();
-        PaintingBinding.instance.imageCache.clear();
-        PaintingBinding.instance.imageCache.clearLiveImages();
-
-        if (Platform.isAndroid) {
-          try {
-            WallpaperManagerPlus().setWallpaper(
-              file,
-              WallpaperManagerPlus.bothScreens,
-            );
-          } catch (e) {
-            debugPrint("WallpaperManager platform error: $e");
-          }
-        }
-
-        _scheduleNextUpdate(const Duration(hours: 24));
-
-        if (mounted) {
-          setState(() {
-            _localFile = file;
-            _wallpaperVersion = DateTime.now().millisecondsSinceEpoch;
-          });
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Zen refreshed.'),
-              duration: Duration(milliseconds: 800),
-              backgroundColor: Color.fromARGB(199, 238, 238, 238),
-            ),
-          );
-        }
-      } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Wallpaper download failed (${response.statusCode})'),
-              duration: const Duration(seconds: 2),
-            ),
-          );
-        }
-      }
-    } catch (e) {
-      debugPrint("Wallpaper Error: $e");
-      _scheduleNextUpdate(const Duration(hours: 1));
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Could not refresh wallpaper. Retrying later.'),
-            duration: Duration(seconds: 2),
-          ),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _isSyncing = false);
     }
   }
 
@@ -198,124 +81,85 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
   }
 
-  void _launchAppByCategory(List<String> packageCandidates, String keyword) {
-    final apps = AppCacheService.instance.apps;
-    ZenApp? target;
-    try {
-      target = apps.firstWhere(
-        (app) => packageCandidates.contains(app.info.packageName),
-      );
-    } catch (_) {
-      try {
-        target = apps.firstWhere(
-          (app) => app.info.name.toLowerCase().contains(keyword),
-        );
-      } catch (_) {}
-    }
-
-    if (target != null) {
-      AppCacheService.instance.launchApp(target);
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('$keyword app not found'),
-          backgroundColor: Colors.white10,
-          duration: const Duration(seconds: 1),
-        ),
-      );
-    }
-  }
-
-  void _launchPhone() {
-    _launchAppByCategory([
-      'com.google.android.dialer',
-      'com.android.dialer',
-      'com.samsung.android.dialer',
-      'com.android.contacts',
-    ], 'phone');
-  }
-
-  void _launchCamera() {
-    _launchAppByCategory([
-      'com.google.android.GoogleCamera',
-      'com.android.camera',
-      'com.sec.android.app.camera',
-      'com.oneplus.camera',
-      'com.motorola.camera2',
-    ], 'camera');
-  }
-
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      resizeToAvoidBottomInset: false,
-      body: GestureDetector(
-        onDoubleTap: () {
-          if (_pageController.hasClients) {
-            int currentIndex = _pageController.page!.round() % 3;
-            if (currentIndex == 1) _syncWallpaper();
-          }
-        },
-        onVerticalDragEnd: (details) {
-          if (details.primaryVelocity! < -500) {
-            _openAppDrawer();
-          } else if (details.primaryVelocity! > 500) {
-            _expandNotifications();
-          }
-        },
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            // 1. Static Background Layer
-            if (_localFile != null)
-              Image.file(
-                _localFile!,
-                key: ValueKey('wallpaper_$_wallpaperVersion'),
-                fit: BoxFit.cover,
-                gaplessPlayback: true,
-              )
-            else
-              const DecoratedBox(
-                decoration: BoxDecoration(color: Colors.black38),
-              ),
-            const DecoratedBox(
-              decoration: BoxDecoration(color: Colors.black38),
-            ),
+    return AnimatedBuilder(
+      animation: WallpaperService.instance,
+      builder: (context, _) {
+        final File? wallpaperFile = WallpaperService.instance.wallpaperFile;
+        final int wallpaperVersion = WallpaperService.instance.wallpaperVersion;
+        final bool isSyncing = WallpaperService.instance.isSyncing;
 
-            // 3. Infinite Carousel
-            PageView.builder(
-              controller: _pageController,
-              itemBuilder: (context, index) {
-                // Modulo math to create the loop
-                // 0: Notes, 1: Home, 2: Calendar
-                final pageIndex = index % 3;
+        return Scaffold(
+          resizeToAvoidBottomInset: false,
+          body: GestureDetector(
+            onDoubleTap: () {
+              if (_pageController.hasClients) {
+                int currentIndex = _pageController.page!.round() % 3;
+                if (currentIndex == 1) {
+                  WallpaperService.instance.syncWallpaper();
+                }
+              }
+            },
+            onVerticalDragEnd: (details) {
+              if (details.primaryVelocity! < -500) {
+                _openAppDrawer();
+              } else if (details.primaryVelocity! > 500) {
+                _expandNotifications();
+              }
+            },
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                // 1. Static Wallpaper Background Layer
+                if (wallpaperFile != null)
+                  Image.file(
+                    wallpaperFile,
+                    key: ValueKey('wallpaper_$wallpaperVersion'),
+                    fit: BoxFit.cover,
+                    gaplessPlayback: true,
+                  )
+                else
+                  const DecoratedBox(
+                    decoration: BoxDecoration(color: Colors.black38),
+                  ),
+                const DecoratedBox(
+                  decoration: BoxDecoration(color: Colors.black38),
+                ),
 
-                if (pageIndex == 0) return const _QuickNotesPage();
-                if (pageIndex == 1) return _buildHomePage();
-                return const _ZenCalendarPage();
-              },
-            ),
+                // 2. Infinite Carousel (0: Notes, 1: Home, 2: Calendar)
+                PageView.builder(
+                  controller: _pageController,
+                  itemBuilder: (context, index) {
+                    final pageIndex = index % 3;
+                    if (pageIndex == 0) return const QuickNotesPage();
+                    if (pageIndex == 1) return _buildHomePage();
+                    return const ZenCalendarPage();
+                  },
+                ),
 
-            // 4. Loading Indicator Overlay
-            if (_isSyncing)
-              const Positioned(
-                bottom: 50,
-                left: 0,
-                right: 0,
-                child: Center(
-                  child: SizedBox(
-                    width: 15,
-                    height: 15,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Colors.white30,
+                // 3. Loading Indicator Overlay
+                if (isSyncing)
+                  const Positioned(
+                    bottom: 50,
+                    left: 0,
+                    right: 0,
+                    child: Center(
+                      child: SizedBox(
+                        width: 15,
+                        height: 15,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white30,
+                        ),
+                      ),
                     ),
                   ),
-                ),
-              ),
-          ],
-        ),
-      ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -326,308 +170,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           const Spacer(flex: 2),
           const ClockWidget(),
           const Spacer(flex: 3),
-
-          // Quick Access Row
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 20),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                _QuickAccessButton(
-                  icon: Icons.phone_outlined,
-                  onTap: _launchPhone,
-                ),
-                GestureDetector(
-                  onTap: _openAppDrawer,
-                  behavior: HitTestBehavior.opaque,
-                  child: Container(
-                    width: 80,
-                    height: 60,
-                    alignment: Alignment.bottomCenter,
-                    child: const Icon(
-                      Icons.keyboard_arrow_up,
-                      color: Colors.white24,
-                      size: 20,
-                    ),
-                  ),
-                ),
-                _QuickAccessButton(
-                  icon: Icons.camera_alt_outlined,
-                  onTap: _launchCamera,
-                ),
-              ],
-            ),
-          ),
+          HomeDock(onOpenDrawer: _openAppDrawer),
         ],
-      ),
-    );
-  }
-}
-
-class _QuickAccessButton extends StatelessWidget {
-  final IconData icon;
-  final VoidCallback onTap;
-
-  const _QuickAccessButton({required this.icon, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return IconButton(
-      onPressed: onTap,
-      icon: Icon(icon, color: Colors.white70, size: 28),
-      style: IconButton.styleFrom(
-        backgroundColor: Colors.transparent,
-        highlightColor: Colors.white10,
-        padding: const EdgeInsets.all(12),
-      ),
-    );
-  }
-}
-
-// --- NEW CAROUSEL PAGES ---
-
-class _QuickNotesPage extends StatefulWidget {
-  const _QuickNotesPage();
-
-  @override
-  State<_QuickNotesPage> createState() => _QuickNotesPageState();
-}
-
-class _QuickNotesPageState extends State<_QuickNotesPage>
-    with AutomaticKeepAliveClientMixin {
-  final TextEditingController _controller = TextEditingController();
-  final FocusNode _focusNode = FocusNode();
-  bool _isLocked = false;
-
-  @override
-  bool get wantKeepAlive => true; // Keep text when swiping away
-
-  @override
-  void initState() {
-    super.initState();
-    _loadNote();
-    _loadLockState();
-  }
-
-  @override
-  void dispose() {
-    _focusNode.dispose();
-    _controller.dispose();
-    super.dispose();
-  }
-
-  Future<void> _loadLockState() async {
-    try {
-      final directory = await getApplicationDocumentsDirectory();
-      final file = File('${directory.path}/quick_note_locked.txt');
-      if (await file.exists()) {
-        final content = await file.readAsString();
-        if (mounted) {
-          setState(() {
-            _isLocked = content.trim() == 'true';
-          });
-        }
-      }
-    } catch (e) {
-      debugPrint("Error loading note lock state: $e");
-    }
-  }
-
-  Future<void> _saveLockState(bool locked) async {
-    try {
-      final directory = await getApplicationDocumentsDirectory();
-      final file = File('${directory.path}/quick_note_locked.txt');
-      await file.writeAsString(locked ? 'true' : 'false');
-    } catch (e) {
-      debugPrint("Error saving note lock state: $e");
-    }
-  }
-
-  void _toggleLock() {
-    setState(() {
-      _isLocked = !_isLocked;
-    });
-    if (_isLocked) {
-      _focusNode.unfocus();
-      SystemChannels.textInput.invokeMethod('TextInput.hide');
-    }
-    _saveLockState(_isLocked);
-  }
-
-  Future<void> _loadNote() async {
-    try {
-      final directory = await getApplicationDocumentsDirectory();
-      final file = File('${directory.path}/quick_note.txt');
-      if (await file.exists()) {
-        final text = await file.readAsString();
-        if (mounted) _controller.text = text;
-      }
-    } catch (e) {
-      debugPrint("Error loading note: $e");
-    }
-  }
-
-  Future<void> _saveNote(String text) async {
-    try {
-      final directory = await getApplicationDocumentsDirectory();
-      final file = File('${directory.path}/quick_note.txt');
-      await file.writeAsString(text);
-    } catch (e) {
-      debugPrint("Error saving note: $e");
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    super.build(context);
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.all(30.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text(
-                  "THOUGHTS",
-                  style: TextStyle(
-                    color: Color.fromARGB(207, 255, 255, 255),
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 2,
-                  ),
-                ),
-                IconButton(
-                  key: const Key('notes_lock_button'),
-                  icon: Icon(
-                    _isLocked ? Icons.lock_outline : Icons.lock_open_rounded,
-                    size: 18,
-                    color: _isLocked ? Colors.white38 : Colors.amberAccent,
-                  ),
-                  tooltip: _isLocked ? "Unlock notes" : "Lock notes",
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                  splashRadius: 18,
-                  onPressed: _toggleLock,
-                ),
-              ],
-            ),
-            const SizedBox(height: 20),
-            Expanded(
-              child: TextField(
-                key: const Key('notes_text_field'),
-                controller: _controller,
-                focusNode: _focusNode,
-                readOnly: _isLocked,
-                showCursor: !_isLocked,
-                onChanged: _saveNote,
-                maxLines: null,
-                expands: true,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  height: 1.5,
-                  fontFamily: 'monospace',
-                ),
-                decoration: InputDecoration(
-                  border: InputBorder.none,
-                  hintText: _isLocked ? "Notes locked." : "Type something...",
-                  hintStyle: const TextStyle(color: Colors.white24),
-                ),
-                cursorColor: Colors.amberAccent,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ZenCalendarPage extends StatelessWidget {
-  const _ZenCalendarPage();
-
-  @override
-  Widget build(BuildContext context) {
-    final now = DateTime.now();
-    final daysInMonth = DateUtils.getDaysInMonth(now.year, now.month);
-    final firstDayOffset = DateTime(now.year, now.month, 1).weekday - 1;
-
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.all(40.0),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              "FOCUS",
-              style: TextStyle(
-                color: Colors.white54,
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 2,
-              ),
-            ),
-            const SizedBox(height: 40),
-            Text(
-              "${now.day}",
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 80,
-                fontWeight: FontWeight.w200,
-              ),
-            ),
-            Text(
-              "EVENTS TODAY",
-              style: TextStyle(
-                color: Colors.amberAccent,
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 2,
-              ),
-            ),
-            const SizedBox(height: 40),
-            // Minimal Month Visualization
-            GridView.builder(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 7,
-                mainAxisSpacing: 10,
-                crossAxisSpacing: 10,
-              ),
-              itemCount: daysInMonth + firstDayOffset,
-              itemBuilder: (context, index) {
-                if (index < firstDayOffset) return const SizedBox();
-                final day = index - firstDayOffset + 1;
-                final isToday = day == now.day;
-
-                return Center(
-                  child: Container(
-                    width: 30,
-                    height: 30,
-                    alignment: Alignment.center,
-                    decoration: isToday
-                        ? const BoxDecoration(
-                            color: Colors.white24,
-                            shape: BoxShape.circle,
-                          )
-                        : null,
-                    child: Text(
-                      "$day",
-                      style: TextStyle(
-                        color: isToday ? Colors.white : Colors.white38,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ),
-                );
-              },
-            ),
-          ],
-        ),
       ),
     );
   }
