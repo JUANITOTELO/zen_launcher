@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../../core/services/app_cache_service.dart';
 import '../../../domain/models/zen_app.dart';
+import '../widgets/app_actions_sheet.dart';
 import '../widgets/app_list_item.dart';
 
 class SmartAppListDrawer extends StatefulWidget {
@@ -38,6 +39,16 @@ class _SmartAppListDrawerState extends State<SmartAppListDrawer> {
   void _dismissKeyboard() {
     _searchFocusNode.unfocus();
     SystemChannels.textInput.invokeMethod('TextInput.hide');
+  }
+
+  void _openAppActions(ZenApp app) {
+    HapticFeedback.mediumImpact();
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) => AppActionsSheet(zenApp: app),
+    );
   }
 
   void _onServiceUpdate() {
@@ -124,6 +135,7 @@ class _SmartAppListDrawerState extends State<SmartAppListDrawer> {
                                     ),
                                     zenApp: _newApps[index],
                                     isHighlighted: true,
+                                    onLongPress: () => _openAppActions(_newApps[index]),
                                   ),
                                   childCount: _newApps.length,
                                 ),
@@ -151,6 +163,7 @@ class _SmartAppListDrawerState extends State<SmartAppListDrawer> {
                                 (context, index) => AppListItem(
                                   key: ValueKey(_allApps[index].info.packageName),
                                   zenApp: _allApps[index],
+                                  onLongPress: () => _openAppActions(_allApps[index]),
                                 ),
                                 childCount: _allApps.length,
                               ),

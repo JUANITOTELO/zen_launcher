@@ -6,34 +6,20 @@ import '../../../core/services/app_cache_service.dart';
 class AppListItem extends StatelessWidget {
   final ZenApp zenApp;
   final bool isHighlighted;
+  final VoidCallback? onLongPress;
 
   static const ColorFilter _grayscaleFilter = ColorFilter.matrix(<double>[
-    0.2126,
-    0.7152,
-    0.0722,
-    0,
-    0,
-    0.2126,
-    0.7152,
-    0.0722,
-    0,
-    0,
-    0.2126,
-    0.7152,
-    0.0722,
-    0,
-    0,
-    0,
-    0,
-    0,
-    1,
-    0,
+    0.2126, 0.7152, 0.0722, 0, 0,
+    0.2126, 0.7152, 0.0722, 0, 0,
+    0.2126, 0.7152, 0.0722, 0, 0,
+    0,      0,      0,      1, 0,
   ]);
 
   const AppListItem({
     super.key,
     required this.zenApp,
     this.isHighlighted = false,
+    this.onLongPress,
   });
 
   @override
@@ -47,6 +33,7 @@ class AppListItem extends StatelessWidget {
         }
         AppCacheService.instance.launchApp(zenApp);
       },
+      onLongPress: onLongPress,
       splashColor: Colors.white10,
       child: Padding(
         padding: EdgeInsets.symmetric(
@@ -60,7 +47,7 @@ class AppListItem extends StatelessWidget {
                 children: [
                   Flexible(
                     child: Text(
-                      zenApp.info.name,
+                      zenApp.displayName,
                       style: TextStyle(
                         fontSize: 16,
                         color: isHighlighted
