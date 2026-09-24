@@ -79,7 +79,7 @@ class AppActionsSheet extends StatelessWidget {
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
         child: Container(
-          color: Colors.black.withOpacity(0.85),
+          color: const Color(0xD9000000), // black with ~85% opacity
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
           child: Column(
             mainAxisSize: MainAxisSize.min,

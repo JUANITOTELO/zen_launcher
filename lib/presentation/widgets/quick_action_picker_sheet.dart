@@ -59,7 +59,7 @@ class _QuickActionPickerSheetState extends State<QuickActionPickerSheet> {
         filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
         child: Container(
           height: MediaQuery.of(context).size.height * 0.75,
-          color: Colors.black.withOpacity(0.85),
+          color: const Color(0xD9000000), // black with ~85% opacity
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,

@@ -1,9 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:zen_launcher/core/services/app_cache_service.dart';
-import 'package:zen_launcher/core/services/quick_action_service.dart';
-import 'package:zen_launcher/data/database/zen_database.dart';
 import 'package:zen_launcher/presentation/widgets/home_dock.dart';
 
 void main() {

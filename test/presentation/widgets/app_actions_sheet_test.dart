@@ -4,7 +4,6 @@ import 'package:installed_apps/app_category.dart';
 import 'package:installed_apps/app_info.dart';
 import 'package:installed_apps/platform_type.dart';
 import 'package:zen_launcher/core/services/app_cache_service.dart';
-import 'package:zen_launcher/core/services/quick_action_service.dart';
 import 'package:zen_launcher/domain/models/zen_app.dart';
 import 'package:zen_launcher/presentation/widgets/app_actions_sheet.dart';
 
