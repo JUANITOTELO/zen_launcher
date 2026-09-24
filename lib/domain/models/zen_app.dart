@@ -4,13 +4,21 @@ class ZenApp {
   final AppInfo info;
   int usageCount;
   final int firstSeenTimestamp; // Unix millis
-  final String normalizedName;
+  String? customName;
 
   ZenApp({
     required this.info,
     required this.usageCount,
     required this.firstSeenTimestamp,
-  }) : normalizedName = info.name.toLowerCase();
+    this.customName,
+  });
+
+  String get displayName =>
+      (customName != null && customName!.trim().isNotEmpty)
+          ? customName!.trim()
+          : info.name;
+
+  String get normalizedName => displayName.toLowerCase();
 
   // It is "New" if it was seen less than 3 hours ago
   bool get isNew {
