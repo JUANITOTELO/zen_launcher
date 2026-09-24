@@ -32,6 +32,7 @@ class MainActivity: FlutterActivity() {
                         addAction(Intent.ACTION_PACKAGE_ADDED)
                         addAction(Intent.ACTION_PACKAGE_REMOVED)
                         addAction(Intent.ACTION_PACKAGE_FULLY_REMOVED)
+                        addAction(Intent.ACTION_PACKAGE_REPLACED)
                         addDataScheme("package") // Essential: Listen for package changes
                     }
 
