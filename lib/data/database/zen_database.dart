@@ -83,6 +83,7 @@ class ZenDatabase {
       CREATE TABLE app_cache (
         package_name TEXT PRIMARY KEY,
         app_name TEXT NOT NULL,
+        custom_name TEXT,
         version_name TEXT,
         version_code INTEGER,
         is_system_app INTEGER DEFAULT 0,
@@ -115,6 +116,7 @@ class ZenDatabase {
         CREATE TABLE IF NOT EXISTS app_cache (
           package_name TEXT PRIMARY KEY,
           app_name TEXT NOT NULL,
+          custom_name TEXT,
           version_name TEXT,
           version_code INTEGER,
           is_system_app INTEGER DEFAULT 0,
@@ -187,11 +189,12 @@ class ZenDatabase {
     for (final app in apps) {
       batch.rawInsert(
         '''INSERT INTO app_cache (
-             package_name, app_name, version_name, version_code, 
+             package_name, app_name, custom_name, version_name, version_code, 
              is_system_app, installed_timestamp, icon, updated_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(package_name) DO UPDATE SET
              app_name = excluded.app_name,
+             custom_name = COALESCE(excluded.custom_name, app_cache.custom_name),
              version_name = excluded.version_name,
              version_code = excluded.version_code,
              is_system_app = excluded.is_system_app,
@@ -202,6 +205,7 @@ class ZenDatabase {
         [
           app.packageName,
           app.appName,
+          app.customName,
           app.versionName,
           app.versionCode,
           app.isSystemApp ? 1 : 0,
@@ -210,6 +214,19 @@ class ZenDatabase {
           now,
         ],
       );
+
+      if (app.usageCount > 0 || app.firstSeenTimestamp > 0) {
+        batch.rawInsert(
+          '''INSERT INTO app_stats (package_name, usage_count, first_seen, custom_name)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT(package_name) DO UPDATE SET
+               usage_count = MAX(app_stats.usage_count, excluded.usage_count),
+               first_seen = CASE WHEN app_stats.first_seen = 0 THEN excluded.first_seen ELSE app_stats.first_seen END,
+               custom_name = COALESCE(excluded.custom_name, app_stats.custom_name)
+          ''',
+          [app.packageName, app.usageCount, app.firstSeenTimestamp, app.customName],
+        );
+      }
     }
     await batch.commit(noResult: true);
   }
@@ -227,10 +244,10 @@ class ZenDatabase {
         c.icon,
         COALESCE(s.usage_count, 0) as usage_count,
         COALESCE(s.first_seen, 0) as first_seen,
-        s.custom_name
+        COALESCE(s.custom_name, c.custom_name) as custom_name
       FROM app_cache c
       LEFT JOIN app_stats s ON c.package_name = s.package_name
-      ORDER BY COALESCE(s.usage_count, 0) DESC, LOWER(COALESCE(s.custom_name, c.app_name)) ASC
+      ORDER BY COALESCE(s.usage_count, 0) DESC, LOWER(COALESCE(s.custom_name, c.custom_name, c.app_name)) ASC
     ''');
 
     return results.map((row) {
