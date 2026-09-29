@@ -19,6 +19,10 @@ void main() {
       await ZenDatabase.instance.initInMemory();
     });
 
+    tearDown(() async {
+      await ZenDatabase.instance.close();
+    });
+
     test('cold boot populates apps immediately from SQLite cache', () async {
       await ZenDatabase.instance.saveCachedApps([
         CachedAppRecord(
@@ -101,6 +105,93 @@ void main() {
       expect(updatedApp.info.name, 'Updated App Name');
       expect(updatedApp.usageCount, 1); // Preserved!
       expect(updatedApp.firstSeenTimestamp, 1000); // Preserved!
+    });
+
+    test('apps filters out hidden apps while hiddenApps retains them', () async {
+      final app1 = ZenApp(
+        info: const AppInfo(
+          name: 'Public App',
+          icon: null,
+          packageName: 'com.test.public',
+          versionName: '1.0',
+          versionCode: 1,
+          platformType: PlatformType.nativeOrOthers,
+          installedTimestamp: 0,
+          isSystemApp: false,
+          isLaunchableApp: true,
+          category: AppCategory.undefined,
+        ),
+        usageCount: 0,
+        firstSeenTimestamp: 0,
+        isHidden: false,
+      );
+
+      final app2 = ZenApp(
+        info: const AppInfo(
+          name: 'Secret App',
+          icon: null,
+          packageName: 'com.test.secret',
+          versionName: '1.0',
+          versionCode: 1,
+          platformType: PlatformType.nativeOrOthers,
+          installedTimestamp: 0,
+          isSystemApp: false,
+          isLaunchableApp: true,
+          category: AppCategory.undefined,
+        ),
+        usageCount: 0,
+        firstSeenTimestamp: 0,
+        isHidden: true,
+      );
+
+      final service = AppCacheService.instance;
+      service.setAppsForTesting([app1, app2]);
+
+      expect(service.apps.length, 1);
+      expect(service.apps.first.displayName, 'Public App');
+
+      expect(service.hiddenApps.length, 1);
+      expect(service.hiddenApps.first.displayName, 'Secret App');
+
+      expect(service.allApps.length, 2);
+
+      // Toggle public app to hidden
+      await service.toggleHideApp(app1);
+      expect(service.apps.length, 0);
+      expect(service.hiddenApps.length, 2);
+
+      // Verify persisted in DB
+      final stats = await ZenDatabase.instance.getAllStats();
+      expect(stats['com.test.public']!['is_hidden'], isTrue);
+
+      // Unhide secret app
+      await service.setAppHidden(app2, false);
+      expect(service.apps.length, 1);
+      expect(service.apps.first.displayName, 'Secret App');
+      expect(service.hiddenApps.length, 1);
+    });
+
+    test('PIN authentication setup, verification, and removal', () async {
+      final service = AppCacheService.instance;
+
+      // Initially no PIN
+      await service.removePin();
+      expect(await service.hasPin(), isFalse);
+
+      // Set PIN
+      await service.setPin('1234');
+      expect(await service.hasPin(), isTrue);
+
+      // Verify correct PIN
+      expect(await service.verifyPin('1234'), isTrue);
+
+      // Verify wrong PIN
+      expect(await service.verifyPin('9999'), isFalse);
+      expect(await service.verifyPin('123'), isFalse);
+
+      // Remove PIN
+      await service.removePin();
+      expect(await service.hasPin(), isFalse);
     });
   });
 }

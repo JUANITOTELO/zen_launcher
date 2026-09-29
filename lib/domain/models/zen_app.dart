@@ -5,12 +5,14 @@ class ZenApp {
   int usageCount;
   final int firstSeenTimestamp; // Unix millis
   String? customName;
+  bool isHidden;
 
   ZenApp({
     required this.info,
     required this.usageCount,
     required this.firstSeenTimestamp,
     this.customName,
+    this.isHidden = false,
   });
 
   String get displayName =>

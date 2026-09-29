@@ -5,6 +5,8 @@ import '../../../core/services/app_cache_service.dart';
 import '../../../domain/models/zen_app.dart';
 import '../widgets/app_actions_sheet.dart';
 import '../widgets/app_list_item.dart';
+import '../widgets/hidden_apps_sheet.dart';
+import '../widgets/pin_auth_dialog.dart';
 
 class SmartAppListDrawer extends StatefulWidget {
   const SmartAppListDrawer({super.key});
@@ -48,6 +50,16 @@ class _SmartAppListDrawerState extends State<SmartAppListDrawer> {
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
       builder: (context) => AppActionsSheet(zenApp: app),
+    );
+  }
+
+  void _openHiddenApps() {
+    _dismissKeyboard();
+    PinAuthDialog.show(
+      context: context,
+      onSuccess: (ctx) {
+        HiddenAppsSheet.show(ctx);
+      },
     );
   }
 
@@ -168,6 +180,45 @@ class _SmartAppListDrawerState extends State<SmartAppListDrawer> {
                                 childCount: _allApps.length,
                               ),
                             ),
+                            if (AppCacheService.instance.hiddenApps.isNotEmpty &&
+                                !_isSearching) ...[
+                              SliverToBoxAdapter(
+                                child: Padding(
+                                  padding: const EdgeInsets.fromLTRB(25, 20, 25, 10),
+                                  child: InkWell(
+                                    onTap: _openHiddenApps,
+                                    borderRadius: BorderRadius.circular(14),
+                                    splashColor: Colors.tealAccent.withValues(alpha: 0.1),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(vertical: 14),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white.withValues(alpha: 0.04),
+                                        borderRadius: BorderRadius.circular(14),
+                                        border: Border.all(color: Colors.white10),
+                                      ),
+                                      child: Row(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: [
+                                          const Icon(Icons.lock_outline,
+                                              color: Colors.tealAccent, size: 16),
+                                          const SizedBox(width: 8),
+                                          Text(
+                                            'HIDDEN APPS (${AppCacheService.instance.hiddenApps.length})',
+                                            style: const TextStyle(
+                                              color: Colors.tealAccent,
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.bold,
+                                              letterSpacing: 1.2,
+                                              fontFamily: 'monospace',
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
                             const SliverToBoxAdapter(child: SizedBox(height: 50)),
                           ],
                         ),
@@ -185,19 +236,30 @@ class _SmartAppListDrawerState extends State<SmartAppListDrawer> {
 
   Widget _buildSearchBar() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(25, 25, 25, 15),
-      child: TextField(
-        controller: _searchController,
-        focusNode: _searchFocusNode,
-        style: const TextStyle(color: Colors.white, fontSize: 18),
-        decoration: const InputDecoration(
-          hintText: 'Search...',
-          hintStyle: TextStyle(color: Colors.white24, fontSize: 18),
-          border: InputBorder.none,
-          isDense: true,
-          contentPadding: EdgeInsets.zero,
-        ),
-        cursorColor: Colors.white,
+      padding: const EdgeInsets.fromLTRB(25, 20, 16, 12),
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: _searchController,
+              focusNode: _searchFocusNode,
+              style: const TextStyle(color: Colors.white, fontSize: 18),
+              decoration: const InputDecoration(
+                hintText: 'Search...',
+                hintStyle: TextStyle(color: Colors.white24, fontSize: 18),
+                border: InputBorder.none,
+                isDense: true,
+                contentPadding: EdgeInsets.zero,
+              ),
+              cursorColor: Colors.white,
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.lock_outline, color: Colors.white54, size: 20),
+            tooltip: 'Hidden Apps',
+            onPressed: _openHiddenApps,
+          ),
+        ],
       ),
     );
   }

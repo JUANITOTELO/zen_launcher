@@ -18,6 +18,10 @@ void main() {
       expect(await db.getVersion(), 3);
     });
 
+    tearDown(() async {
+      await dbService.close();
+    });
+
     test('saves and retrieves launcher settings', () async {
       await dbService.setSetting('quick_action_left', 'com.example.phone');
       final val = await dbService.getSetting('quick_action_left');
@@ -74,6 +78,37 @@ void main() {
       expect(updated.first.usageCount, 1); // Preserved!
       expect(updated.first.firstSeenTimestamp, 123456); // Preserved!
       expect(updated.first.customName, 'My Messenger'); // Preserved!
+    });
+
+    test('sets app hidden status and retrieves via getCachedApps and getAllStats', () async {
+      await dbService.saveCachedApps([
+        CachedAppRecord(
+          packageName: 'com.secret.app',
+          appName: 'Secret Vault',
+          versionName: '1.0.0',
+          versionCode: 1,
+          isSystemApp: false,
+          installedTimestamp: 1000,
+        ),
+      ]);
+
+      // Initially not hidden
+      var apps = await dbService.getCachedApps();
+      expect(apps.first.isHidden, isFalse);
+
+      // Hide app
+      await dbService.setAppHidden('com.secret.app', true);
+
+      apps = await dbService.getCachedApps();
+      expect(apps.first.isHidden, isTrue);
+
+      final stats = await dbService.getAllStats();
+      expect(stats['com.secret.app']!['is_hidden'], isTrue);
+
+      // Unhide app
+      await dbService.setAppHidden('com.secret.app', false);
+      apps = await dbService.getCachedApps();
+      expect(apps.first.isHidden, isFalse);
     });
   });
 }

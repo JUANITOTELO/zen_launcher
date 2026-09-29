@@ -157,6 +157,26 @@ class AppActionsSheet extends StatelessWidget {
               ListTile(
                 dense: true,
                 contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                leading: Icon(
+                  zenApp.isHidden
+                      ? Icons.visibility_outlined
+                      : Icons.visibility_off_outlined,
+                  color: Colors.white70,
+                  size: 22,
+                ),
+                title: Text(
+                  zenApp.isHidden ? 'Unhide App' : 'Hide App',
+                  style: const TextStyle(color: Colors.white, fontSize: 15),
+                ),
+                onTap: () {
+                  HapticFeedback.lightImpact();
+                  AppCacheService.instance.toggleHideApp(zenApp);
+                  Navigator.of(context).pop();
+                },
+              ),
+              ListTile(
+                dense: true,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 8),
                 leading: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 22),
                 title: const Text('Uninstall', style: TextStyle(color: Colors.redAccent, fontSize: 15)),
                 onTap: () => _uninstallApp(context),

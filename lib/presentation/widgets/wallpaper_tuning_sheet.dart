@@ -606,6 +606,59 @@ class _WallpaperTuningSheetState extends State<WallpaperTuningSheet> {
                     ],
                   ),
                   const SizedBox(height: 16),
+                  const Divider(color: Colors.white12, height: 16),
+                  const SizedBox(height: 8),
+                  InkWell(
+                    onTap: () {
+                      Navigator.pop(context, 'open_hidden_apps');
+                    },
+                    borderRadius: BorderRadius.circular(12),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 14),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.04),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.white10),
+                      ),
+                      child: const Row(
+                        children: [
+                          Icon(Icons.lock_outline,
+                              color: Colors.tealAccent, size: 20),
+                          SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'HIDDEN APPS VAULT',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.bold,
+                                    letterSpacing: 1.2,
+                                    fontFamily: 'monospace',
+                                  ),
+                                ),
+                                SizedBox(height: 2),
+                                Text(
+                                  'Access PIN-secured apps',
+                                  style: TextStyle(
+                                    color: Colors.white54,
+                                    fontSize: 11,
+                                    fontFamily: 'monospace',
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Icon(Icons.chevron_right,
+                              color: Colors.white38, size: 20),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
                 ],
               ),
             );

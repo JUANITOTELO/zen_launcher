@@ -7,8 +7,10 @@ import '../drawers/smart_app_drawer.dart';
 import '../pages/quick_notes_page.dart';
 import '../pages/zen_calendar_page.dart';
 import '../widgets/clock_widget.dart';
+import '../widgets/hidden_apps_sheet.dart';
 import '../widgets/holographic_viewport.dart';
 import '../widgets/home_dock.dart';
+import '../widgets/pin_auth_dialog.dart';
 import '../widgets/wallpaper_tuning_sheet.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -84,16 +86,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
   }
 
-  void _openWallpaperTuningSheet() {
+  void _openWallpaperTuningSheet() async {
     HapticFeedback.mediumImpact();
-    showModalBottomSheet(
+    final action = await showModalBottomSheet<String>(
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
       builder: (context) => WallpaperTuningSheet(currentPitch: _lastPitch),
-    ).then((_) {
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    });
+    );
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+
+    if (action == 'open_hidden_apps' && mounted) {
+      PinAuthDialog.show(
+        context: context,
+        onSuccess: (ctx) {
+          HiddenAppsSheet.show(ctx);
+        },
+      );
+    }
   }
 
   @override

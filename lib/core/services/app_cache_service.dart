@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:installed_apps/app_category.dart';
@@ -17,12 +19,19 @@ class AppCacheService extends ChangeNotifier {
   static const _eventChannel = EventChannel(
     'com.zen.launcher/app_change_events',
   );
+  static const String _pinKey = 'hidden_apps_pin';
 
   List<ZenApp> _cachedApps = [];
   bool _isLoaded = false;
   StreamSubscription? _appChangeSubscription;
 
-  List<ZenApp> get apps => List.unmodifiable(_cachedApps);
+  /// Visible apps (excludes hidden apps) for the app drawer, dock, etc.
+  List<ZenApp> get apps =>
+      List.unmodifiable(_cachedApps.where((a) => !a.isHidden));
+  List<ZenApp> get visibleApps => apps;
+  List<ZenApp> get hiddenApps =>
+      List.unmodifiable(_cachedApps.where((a) => a.isHidden));
+  List<ZenApp> get allApps => List.unmodifiable(_cachedApps);
   bool get isLoaded => _isLoaded;
 
   @visibleForTesting
@@ -65,6 +74,7 @@ class AppCacheService extends ChangeNotifier {
             usageCount: r.usageCount,
             firstSeenTimestamp: r.firstSeenTimestamp,
             customName: r.customName,
+            isHidden: r.isHidden,
           );
         }).toList();
         _sortApps();
@@ -131,11 +141,13 @@ class AppCacheService extends ChangeNotifier {
       int usage = 0;
       int firstSeen = 0;
       String? customName;
+      bool isHidden = false;
 
       if (stats.containsKey(app.packageName)) {
         usage = stats[app.packageName]!['usage'] as int;
         firstSeen = stats[app.packageName]!['first_seen'] as int;
         customName = stats[app.packageName]!['custom_name'] as String?;
+        isHidden = (stats[app.packageName]!['is_hidden'] as bool?) ?? false;
       } else {
         firstSeen = isFreshInstall ? 0 : now;
         try {
@@ -149,6 +161,7 @@ class AppCacheService extends ChangeNotifier {
           usageCount: usage,
           firstSeenTimestamp: firstSeen,
           customName: customName,
+          isHidden: isHidden,
         ),
       );
 
@@ -164,6 +177,7 @@ class AppCacheService extends ChangeNotifier {
           usageCount: usage,
           firstSeenTimestamp: firstSeen,
           customName: customName,
+          isHidden: isHidden,
         ),
       );
     }
@@ -189,6 +203,75 @@ class AppCacheService extends ChangeNotifier {
     _sortApps();
     _isLoaded = true;
     notifyListeners();
+  }
+
+  Future<void> setAppHidden(ZenApp app, bool isHidden) async {
+    app.isHidden = isHidden;
+    _sortApps();
+    notifyListeners();
+
+    try {
+      await ZenDatabase.instance.setAppHidden(app.info.packageName, isHidden);
+    } catch (e) {
+      debugPrint("Error persisting app hidden state: $e");
+    }
+  }
+
+  Future<void> toggleHideApp(ZenApp app) async {
+    await setAppHidden(app, !app.isHidden);
+  }
+
+  // --- PIN Authentication Methods ---
+
+  String? _cachedPinHash;
+
+  String _hashPin(String pin) {
+    return sha256.convert(utf8.encode(pin)).toString();
+  }
+
+  Future<bool> hasPin() async {
+    if (_cachedPinHash != null) return _cachedPinHash!.isNotEmpty;
+    try {
+      final pin = await ZenDatabase.instance.getSetting(_pinKey);
+      _cachedPinHash = pin;
+      return pin != null && pin.isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> verifyPin(String pin) async {
+    final hash = _hashPin(pin);
+    if (_cachedPinHash != null) {
+      return _cachedPinHash == hash;
+    }
+    try {
+      final storedHash = await ZenDatabase.instance.getSetting(_pinKey);
+      _cachedPinHash = storedHash;
+      if (storedHash == null) return false;
+      return storedHash == hash;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> setPin(String pin) async {
+    final hash = _hashPin(pin);
+    _cachedPinHash = hash;
+    try {
+      await ZenDatabase.instance.setSetting(_pinKey, hash);
+    } catch (e) {
+      debugPrint("Error saving PIN: $e");
+    }
+  }
+
+  Future<void> removePin() async {
+    _cachedPinHash = null;
+    try {
+      await ZenDatabase.instance.removeSetting(_pinKey);
+    } catch (e) {
+      debugPrint("Error removing PIN: $e");
+    }
   }
 
   Future<void> renameApp(ZenApp app, String? newName) async {

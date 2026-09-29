@@ -14,6 +14,7 @@ class CachedAppRecord {
   final int usageCount;
   final int firstSeenTimestamp;
   final String? customName;
+  final bool isHidden;
 
   CachedAppRecord({
     required this.packageName,
@@ -26,6 +27,7 @@ class CachedAppRecord {
     this.usageCount = 0,
     this.firstSeenTimestamp = 0,
     this.customName,
+    this.isHidden = false,
   });
 }
 
@@ -40,6 +42,10 @@ class ZenDatabase {
 
   @visibleForTesting
   Future<Database> initInMemory() async {
+    if (_database != null) {
+      await _database!.close();
+      _database = null;
+    }
     _database = await openDatabase(
       inMemoryDatabasePath,
       version: AppConstants.dbVersion,
@@ -47,6 +53,13 @@ class ZenDatabase {
       onUpgrade: _onUpgrade,
     );
     return _database!;
+  }
+
+  Future<void> close() async {
+    if (_database != null) {
+      await _database!.close();
+      _database = null;
+    }
   }
 
   Future<Database> get database async {
@@ -134,7 +147,7 @@ class ZenDatabase {
     }
   }
 
-  /// Returns map of PackageName -> {usage, firstSeen, customName}
+  /// Returns map of PackageName -> {usage, firstSeen, customName, isHidden}
   Future<Map<String, Map<String, dynamic>>> getAllStats() async {
     final db = await database;
     final result = await db.query('app_stats');
@@ -145,6 +158,7 @@ class ZenDatabase {
         'usage': (row['usage_count'] as int?) ?? 0,
         'first_seen': (row['first_seen'] as int?) ?? 0,
         'custom_name': row['custom_name'] as String?,
+        'is_hidden': ((row['is_hidden'] as int?) ?? 0) == 1,
       };
     }
     return map;
@@ -175,6 +189,16 @@ class ZenDatabase {
          VALUES (?, 0, ?, ?)
          ON CONFLICT(package_name) DO UPDATE SET custom_name = excluded.custom_name''',
       [packageName, DateTime.now().millisecondsSinceEpoch, customName],
+    );
+  }
+
+  Future<void> setAppHidden(String packageName, bool isHidden) async {
+    final db = await database;
+    await db.rawInsert(
+      '''INSERT INTO app_stats (package_name, usage_count, first_seen, is_hidden)
+         VALUES (?, 0, ?, ?)
+         ON CONFLICT(package_name) DO UPDATE SET is_hidden = excluded.is_hidden''',
+      [packageName, DateTime.now().millisecondsSinceEpoch, isHidden ? 1 : 0],
     );
   }
 
@@ -243,7 +267,8 @@ class ZenDatabase {
         c.icon,
         COALESCE(s.usage_count, 0) as usage_count,
         COALESCE(s.first_seen, 0) as first_seen,
-        COALESCE(s.custom_name, c.custom_name) as custom_name
+        COALESCE(s.custom_name, c.custom_name) as custom_name,
+        COALESCE(s.is_hidden, 0) as is_hidden
       FROM app_cache c
       LEFT JOIN app_stats s ON c.package_name = s.package_name
       ORDER BY COALESCE(s.usage_count, 0) DESC, LOWER(COALESCE(s.custom_name, c.custom_name, c.app_name)) ASC
@@ -261,6 +286,7 @@ class ZenDatabase {
         usageCount: (row['usage_count'] as int?) ?? 0,
         firstSeenTimestamp: (row['first_seen'] as int?) ?? 0,
         customName: row['custom_name'] as String?,
+        isHidden: (row['is_hidden'] as int?) == 1,
       );
     }).toList();
   }
