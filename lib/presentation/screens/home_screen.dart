@@ -7,7 +7,9 @@ import '../drawers/smart_app_drawer.dart';
 import '../pages/quick_notes_page.dart';
 import '../pages/zen_calendar_page.dart';
 import '../widgets/clock_widget.dart';
+import '../widgets/holographic_viewport.dart';
 import '../widgets/home_dock.dart';
+import '../widgets/wallpaper_tuning_sheet.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -21,6 +23,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   // Carousel Controller: initialPage 1000 % 3 == 1 (Home Screen)
   final PageController _pageController = PageController(initialPage: 1000);
+  double _lastPitch = 6.0;
 
   @override
   void initState() {
@@ -81,6 +84,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
   }
 
+  void _openWallpaperTuningSheet() {
+    HapticFeedback.mediumImpact();
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) => WallpaperTuningSheet(currentPitch: _lastPitch),
+    ).then((_) {
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -89,16 +104,32 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final File? wallpaperFile = WallpaperService.instance.wallpaperFile;
         final int wallpaperVersion = WallpaperService.instance.wallpaperVersion;
         final bool isSyncing = WallpaperService.instance.isSyncing;
+        final bool isHolographic =
+            WallpaperService.instance.isHolographicReady;
 
         return Scaffold(
           resizeToAvoidBottomInset: false,
           body: GestureDetector(
+            onLongPress: () {
+              if (_pageController.hasClients) {
+                int currentIndex = _pageController.page!.round() % 3;
+                if (currentIndex == 1) {
+                  _openWallpaperTuningSheet();
+                }
+              } else {
+                _openWallpaperTuningSheet();
+              }
+            },
             onDoubleTap: () {
+              HapticFeedback.lightImpact();
+              WallpaperService.instance.recenterHoldingAngle(_lastPitch);
               if (_pageController.hasClients) {
                 int currentIndex = _pageController.page!.round() % 3;
                 if (currentIndex == 1) {
                   WallpaperService.instance.syncWallpaper();
                 }
+              } else {
+                WallpaperService.instance.syncWallpaper();
               }
             },
             onVerticalDragEnd: (details) {
@@ -111,8 +142,30 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             child: Stack(
               fit: StackFit.expand,
               children: [
-                // 1. Static Wallpaper Background Layer
-                if (wallpaperFile != null)
+                // 1. Wallpaper Background Layer (2.5D Holographic Shader or Fallback)
+                if (isHolographic)
+                  HolographicViewport(
+                    key: ValueKey('holographic_vp_$wallpaperVersion'),
+                    colorImage: WallpaperService.instance.colorImage!,
+                    depthImage: WallpaperService.instance.depthImage!,
+                    shader: WallpaperService.instance.shader!,
+                    focusPlane: WallpaperService.instance.focusPlane,
+                    depthIntensity:
+                        WallpaperService.instance.depthIntensity,
+                    overscan: WallpaperService.instance.overscan,
+                    sheen: WallpaperService.instance.sheen,
+                    detailSensitivity:
+                        WallpaperService.instance.detailSensitivity,
+                    perspectiveWarp:
+                        WallpaperService.instance.perspectiveWarp,
+                    invertX: WallpaperService.instance.invertX,
+                    invertY: WallpaperService.instance.invertY,
+                    restingPitch: WallpaperService.instance.restingPitch,
+                    lockTouchPosition:
+                        WallpaperService.instance.lockTouchPosition,
+                    onPitchUpdate: (pitch) => _lastPitch = pitch,
+                  )
+                else if (wallpaperFile != null)
                   Image.file(
                     wallpaperFile,
                     key: ValueKey('wallpaper_$wallpaperVersion'),
